@@ -24,9 +24,12 @@ const ObjectDetector = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [speechEnabled, setSpeechEnabled] = useState(true);
   const [confidence, setConfidence] = useState(0.5);
+  const [isPaused, setIsPaused] = useState(false);
+  const [showDetections, setShowDetections] = useState(true);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastSpokenRef = useRef<string>('');
@@ -103,8 +106,8 @@ const ObjectDetector = () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
           facingMode: { ideal: 'environment' }
         }
       });
@@ -237,9 +240,54 @@ const ObjectDetector = () => {
   // Track previously announced objects to avoid repetition
   const previousDetectionsRef = useRef<Set<string>>(new Set());
 
+  // Draw detection boxes on overlay canvas
+  const drawDetections = useCallback((detections: Detection[]) => {
+    if (!overlayCanvasRef.current || !videoRef.current) return;
+
+    const canvas = overlayCanvasRef.current;
+    const context = canvas.getContext('2d');
+    const video = videoRef.current;
+
+    if (!context) return;
+
+    // Clear previous drawings
+    context.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw bounding boxes
+    detections.forEach((detection) => {
+      const { box, label, score } = detection;
+      const scaleX = canvas.width / video.videoWidth;
+      const scaleY = canvas.height / video.videoHeight;
+
+      const x = box.xmin * scaleX;
+      const y = box.ymin * scaleY;
+      const width = (box.xmax - box.xmin) * scaleX;
+      const height = (box.ymax - box.ymin) * scaleY;
+
+      // Draw bounding box
+      context.strokeStyle = '#00ff00';
+      context.lineWidth = 3;
+      context.strokeRect(x, y, width, height);
+
+      // Draw label background
+      context.fillStyle = 'rgba(0, 255, 0, 0.8)';
+      context.fillRect(x, y - 30, width, 30);
+
+      // Draw label text
+      context.fillStyle = '#000000';
+      context.font = 'bold 16px Arial';
+      context.textAlign = 'center';
+      context.fillText(
+        `${label} (${Math.round(score * 100)}%)`,
+        x + width / 2,
+        y - 8
+      );
+    });
+  }, []);
+
   // Perform object detection
   const detectObjects = useCallback(async () => {
-    if (!pipeline_ || !videoRef.current || !canvasRef.current) return;
+    if (!pipeline_ || !videoRef.current || !canvasRef.current || isPaused) return;
 
     const canvas = canvasRef.current;
     const context = canvas.getContext('2d');
@@ -261,7 +309,15 @@ const ObjectDetector = () => {
       
       setDetections(filteredResults);
 
+      // Draw detection boxes if enabled
+      if (showDetections) {
+        drawDetections(filteredResults);
+      }
+
       if (filteredResults.length > 0 && speechEnabled) {
+        // Pause detection while speaking
+        setIsPaused(true);
+        
         // Get the highest confidence detection that hasn't been announced recently
         const newDetections = filteredResults.filter(detection => 
           !previousDetectionsRef.current.has(detection.label)
@@ -276,17 +332,26 @@ const ObjectDetector = () => {
           // Track this detection
           previousDetectionsRef.current.add(topDetection.label);
           
-          // Clear tracking after 10 seconds to allow re-announcement
+          // Resume detection after 3 seconds
           setTimeout(() => {
-            previousDetectionsRef.current.delete(topDetection.label);
-          }, 10000);
+            setIsPaused(false);
+            // Clear tracking after 8 seconds to allow re-announcement
+            setTimeout(() => {
+              previousDetectionsRef.current.delete(topDetection.label);
+            }, 8000);
+          }, 3000);
+        } else {
+          // Resume if no new detections
+          setIsPaused(false);
         }
       } else if (filteredResults.length === 0) {
         // Clear previous detections when no objects are visible
         previousDetectionsRef.current.clear();
+        setIsPaused(false);
       }
     } catch (error) {
       console.error('Detection error:', error);
+      setIsPaused(false);
     }
   }, [pipeline_, confidence, speechEnabled, speak]);
 
@@ -358,32 +423,62 @@ const ObjectDetector = () => {
 
       {/* Main Controls */}
       <div className="flex flex-col items-center space-y-6">
-        {/* Video Feed */}
+        {/* Video Feed with Overlay Canvas */}
         <Card className="relative p-4 bg-card border-2">
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full max-w-2xl rounded-lg"
-            style={{ aspectRatio: '4/3' }}
-          />
-          <canvas
-            ref={canvasRef}
-            className="hidden"
-          />
-          
-          {/* Detection Overlay */}
-          {detections.length > 0 && (
-            <div className="absolute top-6 left-6 bg-black/80 text-white p-3 rounded-lg">
-              <h3 className="font-bold text-success mb-2">Detected Objects:</h3>
-              {detections.slice(0, 5).map((detection, index) => (
-                <div key={index} className="text-sm">
-                  {detection.label} ({Math.round(detection.score * 100)}%)
-                </div>
-              ))}
+          <div className="relative w-full max-w-2xl">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="w-full rounded-lg"
+              style={{ aspectRatio: '4/3' }}
+              onLoadedMetadata={() => {
+                // Sync overlay canvas dimensions with video
+                if (overlayCanvasRef.current && videoRef.current) {
+                  const canvas = overlayCanvasRef.current;
+                  const video = videoRef.current;
+                  canvas.width = video.clientWidth;
+                  canvas.height = video.clientHeight;
+                }
+              }}
+            />
+            
+            {/* Overlay canvas for detection boxes */}
+            <canvas
+              ref={overlayCanvasRef}
+              className="absolute top-0 left-0 w-full h-full pointer-events-none rounded-lg"
+              style={{ opacity: showDetections ? 1 : 0 }}
+            />
+            
+            {/* Hidden canvas for detection processing */}
+            <canvas
+              ref={canvasRef}
+              className="hidden"
+            />
+            
+            {/* Status Overlay */}
+            <div className="absolute top-2 left-2 bg-black/80 text-white px-3 py-2 rounded-lg text-sm">
+              {isLoading && "Loading AI..."}
+              {!isLoading && pipeline_ && !isDetecting && "Ready"}
+              {isDetecting && !isPaused && "Scanning..."}
+              {isPaused && "Analyzing Object"}
+              {isSpeaking && " • Speaking"}
             </div>
-          )}
+            
+            {/* Detection Results Overlay */}
+            {detections.length > 0 && (
+              <div className="absolute bottom-2 left-2 right-2 bg-black/80 text-white p-3 rounded-lg">
+                <h3 className="font-bold text-green-400 mb-1">Live Detections:</h3>
+                {detections.slice(0, 3).map((detection, index) => (
+                  <div key={index} className="text-sm flex justify-between">
+                    <span className="capitalize">{detection.label}</span>
+                    <span className="text-green-400">{Math.round(detection.score * 100)}%</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </Card>
 
         {/* Main Action Button */}
@@ -448,6 +543,16 @@ const ObjectDetector = () => {
           >
             <CameraOff />
             Stop Camera
+          </Button>
+
+          <Button
+            onClick={() => setShowDetections(!showDetections)}
+            variant={showDetections ? "default" : "outline"}
+            size="lg"
+            aria-label={showDetections ? "Hide detection boxes" : "Show detection boxes"}
+          >
+            <Eye />
+            {showDetections ? 'Hide Boxes' : 'Show Boxes'}
           </Button>
         </div>
 
