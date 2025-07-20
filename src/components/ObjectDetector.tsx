@@ -146,6 +146,81 @@ const ObjectDetector = () => {
     speak("Camera stopped.");
   }, [toast, speak]);
 
+  // Object descriptions for detailed feedback
+  const getObjectDescription = (label: string): string => {
+    const descriptions: { [key: string]: string } = {
+      'person': 'A person is in front of you. They appear to be standing or moving in the area.',
+      'car': 'A car is detected nearby. Be aware of this vehicle in your surroundings.',
+      'chair': 'A chair is visible. This is a piece of furniture you can sit on.',
+      'table': 'A table is in the area. This is a flat surface, likely for placing items.',
+      'bottle': 'A bottle is detected. This appears to be a container, possibly for drinks.',
+      'cup': 'A cup or mug is visible. This is a drinking vessel, likely containing liquid.',
+      'book': 'A book is detected in the area. This is reading material with pages.',
+      'laptop': 'A laptop computer is visible. This is an electronic device for computing.',
+      'phone': 'A mobile phone is detected. This is a communication device.',
+      'dog': 'A dog is in the area. This is a friendly animal, likely a pet.',
+      'cat': 'A cat is nearby. This is a small domestic animal, often kept as a pet.',
+      'bicycle': 'A bicycle is detected. This is a two-wheeled vehicle for transportation.',
+      'motorcycle': 'A motorcycle is visible. This is a motorized two-wheeled vehicle.',
+      'bus': 'A bus is in the area. This is a large public transportation vehicle.',
+      'truck': 'A truck is detected nearby. This is a large vehicle for carrying cargo.',
+      'traffic light': 'A traffic light is visible. This controls traffic flow at intersections.',
+      'stop sign': 'A stop sign is detected. This is a red octagonal traffic control sign.',
+      'bench': 'A bench is in the area. This is outdoor seating, often found in parks.',
+      'backpack': 'A backpack is visible. This is a bag worn on the back for carrying items.',
+      'handbag': 'A handbag is detected. This is a bag typically carried by hand.',
+      'suitcase': 'A suitcase is in the area. This is luggage for traveling.',
+      'umbrella': 'An umbrella is visible. This is protection from rain or sun.',
+      'tie': 'A necktie is detected. This is formal clothing worn around the neck.',
+      'skis': 'Skis are visible. These are equipment for skiing on snow.',
+      'snowboard': 'A snowboard is detected. This is equipment for snowboarding.',
+      'sports ball': 'A sports ball is in the area. This is equipment used in various games.',
+      'kite': 'A kite is visible. This is a flying object controlled by strings.',
+      'baseball bat': 'A baseball bat is detected. This is sports equipment for hitting balls.',
+      'baseball glove': 'A baseball glove is visible. This is protective sports equipment.',
+      'skateboard': 'A skateboard is in the area. This is a board with wheels for riding.',
+      'surfboard': 'A surfboard is detected. This is equipment for surfing on waves.',
+      'tennis racket': 'A tennis racket is visible. This is equipment for playing tennis.',
+      'wine glass': 'A wine glass is detected. This is a drinking vessel for wine.',
+      'fork': 'A fork is visible. This is eating utensil with prongs.',
+      'knife': 'A knife is detected. This is a cutting utensil with a sharp blade.',
+      'spoon': 'A spoon is in the area. This is an eating utensil for liquids.',
+      'bowl': 'A bowl is visible. This is a round container for food or liquids.',
+      'banana': 'A banana is detected. This is a yellow curved fruit.',
+      'apple': 'An apple is visible. This is a round fruit, often red or green.',
+      'sandwich': 'A sandwich is in the area. This is food between slices of bread.',
+      'orange': 'An orange is detected. This is a round citrus fruit.',
+      'broccoli': 'Broccoli is visible. This is a green vegetable with tree-like florets.',
+      'carrot': 'A carrot is detected. This is an orange root vegetable.',
+      'pizza': 'Pizza is in the area. This is a round flatbread with toppings.',
+      'donut': 'A donut is visible. This is a sweet ring-shaped pastry.',
+      'cake': 'A cake is detected. This is a sweet baked dessert.',
+      'couch': 'A couch or sofa is visible. This is large seating furniture.',
+      'bed': 'A bed is detected. This is furniture for sleeping.',
+      'dining table': 'A dining table is in the area. This is furniture for eating meals.',
+      'toilet': 'A toilet is visible. This is bathroom sanitary equipment.',
+      'tv': 'A television is detected. This is an electronic device for viewing programs.',
+      'remote': 'A remote control is visible. This device controls electronic equipment.',
+      'keyboard': 'A computer keyboard is detected. This is for typing on computers.',
+      'mouse': 'A computer mouse is visible. This is for controlling computer cursors.',
+      'microwave': 'A microwave oven is in the area. This appliance heats food quickly.',
+      'oven': 'An oven is detected. This is a cooking appliance for baking.',
+      'toaster': 'A toaster is visible. This appliance makes toast from bread.',
+      'sink': 'A sink is in the area. This is for washing dishes or hands.',
+      'refrigerator': 'A refrigerator is detected. This appliance keeps food cold.',
+      'clock': 'A clock is visible. This device shows the current time.',
+      'vase': 'A vase is detected. This is a container often used for flowers.',
+      'teddy bear': 'A teddy bear is in the area. This is a soft stuffed toy.',
+      'hair drier': 'A hair dryer is visible. This device dries and styles hair.',
+      'toothbrush': 'A toothbrush is detected. This is for cleaning teeth.'
+    };
+    
+    return descriptions[label] || `A ${label} is detected in your surroundings. This object is now visible in the camera view.`;
+  };
+
+  // Track previously announced objects to avoid repetition
+  const previousDetectionsRef = useRef<Set<string>>(new Set());
+
   // Perform object detection
   const detectObjects = useCallback(async () => {
     if (!pipeline_ || !videoRef.current || !canvasRef.current) return;
@@ -171,12 +246,28 @@ const ObjectDetector = () => {
       setDetections(filteredResults);
 
       if (filteredResults.length > 0 && speechEnabled) {
-        const objects = filteredResults
-          .slice(0, 3) // Limit to top 3 detections
-          .map((detection: Detection) => detection.label)
-          .join(', ');
-        
-        speak(`I can see: ${objects}`);
+        // Get the highest confidence detection that hasn't been announced recently
+        const newDetections = filteredResults.filter(detection => 
+          !previousDetectionsRef.current.has(detection.label)
+        );
+
+        if (newDetections.length > 0) {
+          // Announce the most confident new detection
+          const topDetection = newDetections[0];
+          const description = getObjectDescription(topDetection.label);
+          speak(description);
+          
+          // Track this detection
+          previousDetectionsRef.current.add(topDetection.label);
+          
+          // Clear tracking after 10 seconds to allow re-announcement
+          setTimeout(() => {
+            previousDetectionsRef.current.delete(topDetection.label);
+          }, 10000);
+        }
+      } else if (filteredResults.length === 0) {
+        // Clear previous detections when no objects are visible
+        previousDetectionsRef.current.clear();
       }
     } catch (error) {
       console.error('Detection error:', error);
