@@ -293,15 +293,18 @@ const ObjectDetector = () => {
     const context = canvas.getContext('2d');
     const video = videoRef.current;
 
-    if (!context) return;
+    if (!context || video.videoWidth === 0 || video.videoHeight === 0) return;
 
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     context.drawImage(video, 0, 0);
 
     try {
-      const imageData = canvas.toDataURL('image/jpeg');
-      const results = await pipeline_(imageData);
+      // Create ImageData object for the pipeline
+      const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+      
+      // Convert to the format expected by transformers.js
+      const results = await pipeline_(canvas);
       
       const filteredResults = results.filter((detection: Detection) => 
         detection.score >= confidence
@@ -315,7 +318,7 @@ const ObjectDetector = () => {
       }
 
       if (filteredResults.length > 0 && speechEnabled) {
-        // Pause detection while speaking
+        // Pause detection for 3 minutes when objects are found
         setIsPaused(true);
         
         // Get the highest confidence detection that hasn't been announced recently
@@ -324,25 +327,36 @@ const ObjectDetector = () => {
         );
 
         if (newDetections.length > 0) {
-          // Announce the most confident new detection
-          const topDetection = newDetections[0];
-          const description = getObjectDescription(topDetection.label);
-          speak(description);
+          // Announce all new detections
+          const descriptions = newDetections.slice(0, 3).map(detection => 
+            getObjectDescription(detection.label)
+          );
           
-          // Track this detection
-          previousDetectionsRef.current.add(topDetection.label);
+          const fullDescription = descriptions.length === 1 
+            ? descriptions[0]
+            : `I can see ${newDetections.length} objects: ${descriptions.join('. Also, ')}.`;
           
-          // Resume detection after 3 seconds
+          speak(fullDescription);
+          
+          // Track these detections
+          newDetections.forEach(detection => {
+            previousDetectionsRef.current.add(detection.label);
+          });
+          
+          // Hold detection for 3 minutes (180 seconds) to allow user to examine objects
           setTimeout(() => {
             setIsPaused(false);
-            // Clear tracking after 8 seconds to allow re-announcement
-            setTimeout(() => {
-              previousDetectionsRef.current.delete(topDetection.label);
-            }, 8000);
-          }, 3000);
+            speak("Resuming object detection scan.");
+            // Clear tracking after hold period to allow re-announcement
+            newDetections.forEach(detection => {
+              previousDetectionsRef.current.delete(detection.label);
+            });
+          }, 180000); // 3 minutes
         } else {
-          // Resume if no new detections
-          setIsPaused(false);
+          // Resume if no new detections after 10 seconds
+          setTimeout(() => {
+            setIsPaused(false);
+          }, 10000);
         }
       } else if (filteredResults.length === 0) {
         // Clear previous detections when no objects are visible
@@ -352,8 +366,25 @@ const ObjectDetector = () => {
     } catch (error) {
       console.error('Detection error:', error);
       setIsPaused(false);
+      // Try alternative canvas method if direct canvas fails
+      try {
+        const imageDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        const results = await pipeline_(imageDataUrl);
+        
+        const filteredResults = results.filter((detection: Detection) => 
+          detection.score >= confidence
+        );
+        
+        setDetections(filteredResults);
+        
+        if (showDetections) {
+          drawDetections(filteredResults);
+        }
+      } catch (fallbackError) {
+        console.error('Fallback detection error:', fallbackError);
+      }
     }
-  }, [pipeline_, confidence, speechEnabled, speak]);
+  }, [pipeline_, confidence, speechEnabled, speak, showDetections, drawDetections, isPaused]);
 
   // Start/stop detection
   const toggleDetection = useCallback(async () => {
@@ -368,7 +399,7 @@ const ObjectDetector = () => {
       }
       
       setIsDetecting(true);
-      intervalRef.current = setInterval(detectObjects, 2000);
+      intervalRef.current = setInterval(detectObjects, 1500);
       speak("Object detection started. I will announce what I see around you.");
     } else {
       setIsDetecting(false);
